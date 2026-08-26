@@ -273,7 +273,7 @@ def open_postgres_connection(config: dict):
     )
 
 def load_records_to_postgres(records: List[Dict[str, Any]]) -> int:
-    """Streams validated mandi records into PostgreSQL with ON CONFLICT idempotency."""
+    """Streams validated mandi records into PostgreSQL with write-time apmc_id resolution and summary refresh."""
     if not records:
         logger.warning("No records to insert into PostgreSQL")
         return 0
@@ -288,15 +288,42 @@ def load_records_to_postgres(records: List[Dict[str, Any]]) -> int:
 
     conn = open_postgres_connection(config)
 
+    # 1. Preload market_apmc_map for O(1) resolution
+    market_map = {}
+    with conn.cursor() as cur:
+        try:
+            cur.execute("SELECT raw_market, canonical_market, apmc_id FROM market_apmc_map;")
+            for rm, cm, aid in cur.fetchall():
+                market_map[rm] = (cm, aid)
+        except Exception as e:
+            logger.warning(f"Could not load market_apmc_map: {e}")
+
+    # 2. Enrich records with canonical_market and apmc_id
+    touched_pairs = set()
+    for r in records:
+        raw_mkt = r.get("market", "")
+        if raw_mkt in market_map:
+            cm, aid = market_map[raw_mkt]
+            r["canonical_market"] = cm
+            r["apmc_id"] = aid
+        else:
+            r["canonical_market"] = raw_mkt
+            r["apmc_id"] = None
+        
+        if r.get("apmc_id") and r.get("commodity"):
+            touched_pairs.add((r["apmc_id"], r["commodity"]))
+
     insert_query = """
         INSERT INTO mandi_observations (
             observation_hash, source, trade_date, state, district, market,
+            canonical_market, apmc_id,
             commodity, variety, grade, raw_min_price, raw_modal_price, raw_max_price,
             raw_price_unit, normalized_min_price_qtl, normalized_modal_price_qtl,
             normalized_max_price_qtl, raw_arrival_quantity, raw_arrival_unit,
             quality_status, created_at
         ) VALUES (
             %(observation_hash)s, %(source)s, %(trade_date)s, %(state)s, %(district)s, %(market)s,
+            %(canonical_market)s, %(apmc_id)s,
             %(commodity)s, %(variety)s, %(grade)s, %(raw_min_price)s, %(raw_modal_price)s, %(raw_max_price)s,
             %(raw_price_unit)s, %(normalized_min_price_qtl)s, %(normalized_modal_price_qtl)s,
             %(normalized_max_price_qtl)s, %(raw_arrival_quantity)s, %(raw_arrival_unit)s,
@@ -310,6 +337,8 @@ def load_records_to_postgres(records: List[Dict[str, Any]]) -> int:
             normalized_min_price_qtl = EXCLUDED.normalized_min_price_qtl,
             normalized_max_price_qtl = EXCLUDED.normalized_max_price_qtl,
             raw_arrival_quantity = EXCLUDED.raw_arrival_quantity,
+            canonical_market = EXCLUDED.canonical_market,
+            apmc_id = EXCLUDED.apmc_id,
             quality_status = EXCLUDED.quality_status;
     """
 
@@ -317,10 +346,100 @@ def load_records_to_postgres(records: List[Dict[str, Any]]) -> int:
         execute_batch(cur, insert_query, records, page_size=1000)
         conn.commit()
 
+        # 3. Incremental Refresh of mandi_price_summary for touched pairs
+        if touched_pairs:
+            try:
+                apmc_list = [p[0] for p in touched_pairs]
+                comm_list = [p[1] for p in touched_pairs]
+                refresh_summary_query = """
+                WITH touched_pairs AS (
+                    SELECT DISTINCT apmc_id, commodity 
+                    FROM UNNEST(%(apmcs)s::BIGINT[], %(comms)s::TEXT[]) AS t(apmc_id, commodity)
+                    WHERE apmc_id IS NOT NULL
+                ),
+                max_dates AS (
+                    SELECT 
+                        o.apmc_id,
+                        o.commodity,
+                        MAX(o.trade_date) as max_date
+                    FROM mandi_observations o
+                    JOIN touched_pairs tp 
+                      ON o.apmc_id = tp.apmc_id AND o.commodity = tp.commodity
+                    WHERE o.quality_status = 'accepted'
+                    GROUP BY o.apmc_id, o.commodity
+                ),
+                recent_slices AS (
+                    SELECT 
+                        o.apmc_id,
+                        o.commodity,
+                        o.canonical_market,
+                        o.state,
+                        o.district,
+                        o.trade_date,
+                        o.normalized_modal_price_qtl::DOUBLE PRECISION as price,
+                        o.raw_arrival_quantity::DOUBLE PRECISION as arrival_qty,
+                        m.max_date
+                    FROM mandi_observations o
+                    JOIN max_dates m 
+                      ON o.apmc_id = m.apmc_id AND o.commodity = m.commodity
+                    WHERE o.trade_date >= (m.max_date - INTERVAL '90 days')
+                      AND o.quality_status = 'accepted'
+                ),
+                aggregated AS (
+                    SELECT 
+                        apmc_id,
+                        commodity,
+                        MAX(canonical_market) as canonical_market,
+                        MAX(state) as state,
+                        MAX(district) as district,
+                        max_date as latest_trade_date,
+                        (ARRAY_AGG(price ORDER BY trade_date DESC))[1] as latest_price,
+                        MIN(CASE WHEN trade_date >= (max_date - INTERVAL '7 days') THEN price END) as min_price_7d,
+                        MAX(CASE WHEN trade_date >= (max_date - INTERVAL '7 days') THEN price END) as max_price_7d,
+                        ROUND(AVG(CASE WHEN trade_date >= (max_date - INTERVAL '7 days') THEN price END)::NUMERIC, 2)::DOUBLE PRECISION as avg_price_7d,
+                        ROUND(AVG(price)::NUMERIC, 2)::DOUBLE PRECISION as avg_price_90d,
+                        SUM(CASE WHEN trade_date >= (max_date - INTERVAL '7 days') THEN arrival_qty END) as arrival_volume_7d
+                    FROM recent_slices
+                    GROUP BY apmc_id, commodity, max_date
+                )
+                INSERT INTO mandi_price_summary (
+                    apmc_id, commodity, canonical_market, state, district,
+                    latest_trade_date, latest_price, min_price_7d, max_price_7d,
+                    avg_price_7d, avg_price_90d, arrival_volume_7d, updated_at
+                )
+                SELECT 
+                    apmc_id, commodity, canonical_market, state, district,
+                    latest_trade_date, latest_price,
+                    COALESCE(min_price_7d, latest_price),
+                    COALESCE(max_price_7d, latest_price),
+                    COALESCE(avg_price_7d, latest_price),
+                    COALESCE(avg_price_90d, latest_price),
+                    COALESCE(arrival_volume_7d, 0),
+                    NOW()
+                FROM aggregated
+                ON CONFLICT (apmc_id, commodity) DO UPDATE SET
+                    canonical_market = EXCLUDED.canonical_market,
+                    state = EXCLUDED.state,
+                    district = EXCLUDED.district,
+                    latest_trade_date = EXCLUDED.latest_trade_date,
+                    latest_price = EXCLUDED.latest_price,
+                    min_price_7d = EXCLUDED.min_price_7d,
+                    max_price_7d = EXCLUDED.max_price_7d,
+                    avg_price_7d = EXCLUDED.avg_price_7d,
+                    avg_price_90d = EXCLUDED.avg_price_90d,
+                    arrival_volume_7d = EXCLUDED.arrival_volume_7d,
+                    updated_at = NOW();
+                """
+                cur.execute(refresh_summary_query, {"apmcs": apmc_list, "comms": comm_list})
+                conn.commit()
+                logger.info(f"⚡ Incrementally refreshed mandi_price_summary for {len(touched_pairs):,} (apmc, commodity) pairs.")
+            except Exception as e:
+                logger.warning(f"Could not incrementally refresh mandi_price_summary: {e}")
+
         # Warmup query planner statistics
         conn.autocommit = True
         try:
-            cur.execute("ANALYZE mandi_observations;")
+            cur.execute("ANALYZE mandi_observations; ANALYZE mandi_price_summary;")
         except Exception as e:
             logger.warning(f"Could not execute ANALYZE: {e}")
 
