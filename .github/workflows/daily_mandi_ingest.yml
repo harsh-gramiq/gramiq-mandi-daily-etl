@@ -2,9 +2,9 @@ name: 🌾 GramIQ MandiBhav — Daily National ETL & Teams Sync
 
 on:
   schedule:
-    # Runs Monday through Saturday at 13:30 UTC (7:00 PM IST)
+    # Primary Sync: Monday through Saturday at 13:30 UTC (7:00 PM IST) — Peak national closing
     - cron: '30 13 * * 1-6'
-    # Optional second sync at 18:30 UTC (12:00 AM IST night closing)
+    # Night Reconciliation: Monday through Saturday at 18:30 UTC (12:00 AM IST) — Complete reconciliation
     - cron: '30 18 * * 1-6'
   workflow_dispatch:
     inputs:
@@ -13,16 +13,23 @@ on:
         required: false
         default: ''
       dry_run:
-        description: 'Dry run mode (extract and generate Teams card without database write)'
+        description: 'Dry run mode (extract and calculate without database write)'
         type: boolean
         required: false
         default: false
+
+concurrency:
+  group: daily-mandi-ingest
+  cancel-in-progress: false
+
+permissions:
+  contents: read
 
 jobs:
   ingest_mandi_rates:
     name: ⚡ AGMARKNET 2.0 Ingestion & Teams Card Dispatch
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 10
 
     steps:
       - name: 📥 Check out repository
@@ -47,15 +54,11 @@ jobs:
           PRODUCTION_DB_NAME: ${{ secrets.PRODUCTION_DB_NAME }}
           PRODUCTION_DB_USERNAME: ${{ secrets.PRODUCTION_DB_USERNAME }}
           PRODUCTION_DB_PASSWORD: ${{ secrets.PRODUCTION_DB_PASSWORD }}
-          # Fallback URI
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          POSTGRES_HOST: ${{ secrets.POSTGRES_HOST }}
-          POSTGRES_PORT: ${{ secrets.POSTGRES_PORT }}
-          POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
-          POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
-          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           # Microsoft Teams Adaptive Card Webhook
           TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
+          # Google Gemini AI Key
+          GEMINI_API_KEY_OG: ${{ secrets.GEMINI_API_KEY_OG }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           CMD_ARGS="--print-card"
           if [ -n "${{ github.event.inputs.trade_date }}" ]; then
