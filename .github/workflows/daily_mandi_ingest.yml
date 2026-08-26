@@ -12,6 +12,10 @@ on:
         description: 'Trade date to ingest (YYYY-MM-DD, defaults to today)'
         required: false
         default: ''
+      lookback_days:
+        description: 'Trailing lookback window in days (default: 3)'
+        required: false
+        default: '3'
       dry_run:
         description: 'Dry run mode (extract and calculate without database write)'
         type: boolean
@@ -63,6 +67,9 @@ jobs:
           CMD_ARGS="--print-card"
           if [ -n "${{ github.event.inputs.trade_date }}" ]; then
             CMD_ARGS="$CMD_ARGS --date ${{ github.event.inputs.trade_date }}"
+          fi
+          if [ -n "${{ github.event.inputs.lookback_days }}" ]; then
+            CMD_ARGS="$CMD_ARGS --lookback-days ${{ github.event.inputs.lookback_days }}"
           fi
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
             CMD_ARGS="$CMD_ARGS --dry-run"

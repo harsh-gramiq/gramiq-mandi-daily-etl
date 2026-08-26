@@ -162,9 +162,9 @@ def build_http_session() -> requests.Session:
     })
     return session
 
-def fetch_single_task(session: requests.Session, task: Tuple[int, str, str], year_val: int, month_val: int, target_ddmmyyyy: str, target_date: str, created_at: str) -> List[Dict[str, Any]]:
-    """Fetches and parses a single (commodity, state) pair from AGMARKNET 2.0 API with strict validation."""
-    c_id, s_id, c_name = task
+def fetch_single_task(session: requests.Session, task_payload: Tuple[int, str, str, int, int, Dict[str, str]], created_at: str) -> List[Dict[str, Any]]:
+    """Fetches and parses a single (commodity, state, year, month) block, extracting all matching lookback dates."""
+    c_id, s_id, c_name, year_val, month_val, valid_dates = task_payload
     url = f"https://api.agmarknet.gov.in/v1/prices-and-arrivals/date-wise/specific-commodity?year={year_val}&month={month_val}&stateId={s_id}&commodityId={c_id}&includeExcel=false"
 
     results: List[Dict[str, Any]] = []
@@ -189,8 +189,9 @@ def fetch_single_task(session: requests.Session, task: Tuple[int, str, str], yea
 
                 for day in m_block.get("dates", []):
                     raw_date = str(day.get("arrivalDate", "")).strip()
-                    if raw_date != target_ddmmyyyy:
+                    if raw_date not in valid_dates:
                         continue
+                    obs_date = valid_dates[raw_date]
 
                     for item in day.get("data", []):
                         try:
@@ -211,12 +212,12 @@ def fetch_single_task(session: requests.Session, task: Tuple[int, str, str], yea
                         var = str(item.get("varietyName") or "Standard").strip()
                         grd = str(item.get("gradeName") or "FAQ").strip()
 
-                        obs_hash = compute_observation_hash("agmarknet_official_v2", target_date, state_name, clean_mkt, c_name, var, grd)
+                        obs_hash = compute_observation_hash("agmarknet_official_v2", obs_date, state_name, clean_mkt, c_name, var, grd)
 
                         results.append({
                             "observation_hash": obs_hash,
                             "source": "agmarknet_official_v2",
-                            "trade_date": target_date,
+                            "trade_date": obs_date,
                             "state": state_name,
                             "district": district_name,
                             "market": clean_mkt,
@@ -243,31 +244,38 @@ def fetch_single_task(session: requests.Session, task: Tuple[int, str, str], yea
 
     return results
 
-def extract_agmarknet_live_parallel(target_date: str, max_workers: int = 8) -> List[Dict[str, Any]]:
+def extract_agmarknet_live_parallel(target_date: str, max_workers: int = 8, lookback_days: int = 3) -> List[Dict[str, Any]]:
     """
-    Extracts daily APMC arrivals and modal rates using concurrent worker threads.
-    Reduces total network latency from 273s to ~12–18s.
+    Extracts daily APMC arrivals and modal rates across a rolling lookback window using concurrent workers.
+    Captures late-arriving records automatically with zero extra HTTP calls.
     """
     try:
         dt = datetime.strptime(target_date, "%Y-%m-%d")
-        year_val = dt.year
-        month_val = dt.month
-        target_ddmmyyyy = dt.strftime("%d/%m/%Y")
     except Exception:
         dt = datetime.now()
-        year_val = dt.year
-        month_val = dt.month
-        target_ddmmyyyy = dt.strftime("%d/%m/%Y")
         target_date = dt.strftime("%Y-%m-%d")
 
-    logger.info(f"🚀 Launching {max_workers}-Worker Concurrent Extractor for {target_date} ({target_ddmmyyyy})")
+    lookback_days = max(1, lookback_days)
+    target_dates = [dt - timedelta(days=i) for i in range(lookback_days)]
+    
+    # Group target dates by (year, month) to query appropriate ledger blocks
+    month_map: Dict[Tuple[int, int], Dict[str, str]] = {}
+    for d in target_dates:
+        ym = (d.year, d.month)
+        if ym not in month_map:
+            month_map[ym] = {}
+        month_map[ym][d.strftime("%d/%m/%Y")] = d.strftime("%Y-%m-%d")
+
+    dates_str = ", ".join([d.strftime("%d/%m/%Y") for d in target_dates])
+    logger.info(f"🚀 Launching {max_workers}-Worker Concurrent Extractor for {target_date} (Lookback: {lookback_days} days -> {dates_str})")
     start_time = time.time()
 
-    tasks: List[Tuple[int, str, str]] = []
-    for c_id, c_name in PRIORITY_COMMODITIES.items():
-        states_to_query = PRODUCING_STATES.get(c_id, TOP_STAPLE_STATES)
-        for s_id in states_to_query:
-            tasks.append((c_id, str(s_id), c_name))
+    tasks: List[Tuple[int, str, str, int, int, Dict[str, str]]] = []
+    for (year_val, month_val), valid_dates in month_map.items():
+        for c_id, c_name in PRIORITY_COMMODITIES.items():
+            states_to_query = PRODUCING_STATES.get(c_id, TOP_STAPLE_STATES)
+            for s_id in states_to_query:
+                tasks.append((c_id, str(s_id), c_name, year_val, month_val, valid_dates))
 
     created_at = datetime.now(timezone.utc).isoformat()
     all_records: List[Dict[str, Any]] = []
@@ -277,7 +285,7 @@ def extract_agmarknet_live_parallel(target_date: str, max_workers: int = 8) -> L
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_map = {
-            executor.submit(fetch_single_task, session, task, year_val, month_val, target_ddmmyyyy, target_date, created_at): task
+            executor.submit(fetch_single_task, session, task, created_at): task
             for task in tasks
         }
 
@@ -548,7 +556,8 @@ def compute_live_market_analytics(records: List[Dict[str, Any]]) -> Dict[str, An
             "top_divergence_spread_pct": 0.0,
             "top_divergence_corridor": "N/A",
             "top_spreads": [],
-            "state_breakdown": {}
+            "state_breakdown": {},
+            "date_breakdown": {}
         }
 
     df = pd.DataFrame(records)
@@ -610,6 +619,16 @@ def compute_live_market_analytics(records: List[Dict[str, Any]]) -> Dict[str, An
             "arrivals_tonnes": round(float(group["raw_arrival_quantity"].sum()), 1)
         }
 
+    # Date Breakdown (For rolling lookback multi-date extractions)
+    date_breakdown = {}
+    for d_val, group in df.groupby("trade_date"):
+        date_breakdown[str(d_val)] = {
+            "records": len(group),
+            "mandis": group["market"].nunique(),
+            "commodities": group["commodity"].nunique(),
+            "arrivals_tonnes": round(float(group["raw_arrival_quantity"].sum()), 1)
+        }
+
     return {
         "record_count": record_count,
         "crops_count": crops_count,
@@ -624,7 +643,8 @@ def compute_live_market_analytics(records: List[Dict[str, Any]]) -> Dict[str, An
         "top_divergence_spread_pct": top_div_spread,
         "top_divergence_corridor": top_div_corridor,
         "top_spreads": spread_list[:5],
-        "state_breakdown": state_breakdown
+        "state_breakdown": state_breakdown,
+        "date_breakdown": date_breakdown
     }
 
 # --------------------------------------------------------------------------------------------------
@@ -721,7 +741,8 @@ def build_teams_adaptive_card(
     execution_time_s: float,
     is_success: bool,
     is_dry_run: bool = False,
-    error_msg: Optional[str] = None
+    error_msg: Optional[str] = None,
+    lookback_days: int = 3
 ) -> dict:
     """Builds an enterprise Microsoft Teams Adaptive Card v1.5 with real metrics and collapsible accordions."""
     now_ist_str = datetime.now(timezone.utc).strftime("%d %B %Y | %I:%M %p UTC")
@@ -735,6 +756,10 @@ def build_teams_adaptive_card(
     status_color = "Good" if is_success else "Attention"
     states_label = f"{analytics['states_count']} State" if analytics['states_count'] == 1 else f"{analytics['states_count']} States"
 
+    sub_title = f"Trade Date: {target_date} • Dispatched at {now_ist_str}"
+    if lookback_days > 1:
+        sub_title = f"Trade Date: {target_date} (Rolling {lookback_days}-Day Window) • Dispatched at {now_ist_str}"
+
     # Top Spreads FactSet
     spread_facts = []
     for s in analytics.get("top_spreads", [])[:3]:
@@ -745,6 +770,11 @@ def build_teams_adaptive_card(
 
     if not spread_facts:
         spread_facts.append({"title": "Price Volatility", "value": "Stable (<2% variance across APMCs)"})
+
+    extra_facts = []
+    if lookback_days > 1 and len(analytics.get("date_breakdown", {})) > 1:
+        date_summary_str = ", ".join([f"{d}: {info['records']:,} rows" for d, info in sorted(analytics.get("date_breakdown", {}).items(), reverse=True)])
+        extra_facts.append({"title": "📅 Ingestion Scope", "value": f"Trailing {lookback_days} Days ({date_summary_str})"})
 
     # State Breakdown Rows
     state_breakdown_items = []
@@ -784,7 +814,7 @@ def build_teams_adaptive_card(
                                             "width": "stretch",
                                             "items": [
                                                 {"type": "TextBlock", "text": status_title, "weight": "Bolder", "size": "Large", "color": "Accent"},
-                                                {"type": "TextBlock", "text": f"Trade Date: {target_date} • Dispatched at {now_ist_str}", "isSubtle": True, "spacing": "None", "size": "Small"}
+                                                {"type": "TextBlock", "text": sub_title, "isSubtle": True, "spacing": "None", "size": "Small"}
                                             ]
                                         },
                                         {
@@ -865,6 +895,7 @@ def build_teams_adaptive_card(
                                 {"title": "📦 Top Volume Crop", "value": f"{analytics['top_crop']} ({analytics['top_crop_volume']:,} Tonnes)"},
                                 {"title": "🏛️ Top Trading Hub", "value": f"{analytics['top_mandi']} ({analytics['top_mandi_trades']} active lots)"},
                                 {"title": "⚡ Total Ingested Volume", "value": f"{analytics['total_arrivals_tonnes']:,} Tonnes"},
+                                *extra_facts,
                                 *spread_facts
                             ]
                         },
@@ -931,6 +962,7 @@ def send_teams_notification(card_payload: dict) -> bool:
 def main():
     parser = argparse.ArgumentParser(description="GramIQ MandiBhav Daily Ingestion Pipeline")
     parser.add_argument("--date", type=str, default="", help="Trade date (YYYY-MM-DD, defaults to today)")
+    parser.add_argument("--lookback-days", type=int, default=3, help="Rolling trailing lookback window (default: 3 days)")
     parser.add_argument("--workers", type=int, default=8, help="Number of concurrent extractor worker threads")
     parser.add_argument("--dry-run", action="store_true", help="Dry run mode (extract and calculate without DB write)")
     parser.add_argument("--print-card", action="store_true", help="Print card summary to stdout/GITHUB_STEP_SUMMARY")
@@ -944,15 +976,15 @@ def main():
     else:
         target_date = datetime.now().strftime("%Y-%m-%d")
 
-    logger.info(f"🌾 Starting GramIQ MandiBhav Daily Ingestion Pipeline for date: {target_date} (Workers: {args.workers})")
+    logger.info(f"🌾 Starting GramIQ MandiBhav Daily Ingestion Pipeline for date: {target_date} (Lookback: {args.lookback_days}d, Workers: {args.workers})")
 
     is_success = True
     error_msg = None
     records: List[Dict[str, Any]] = []
 
     try:
-        # Step 1: High-Speed Concurrent Extraction
-        records = extract_agmarknet_live_parallel(target_date, max_workers=args.workers)
+        # Step 1: High-Speed Concurrent Extraction with Multi-Day Lookback
+        records = extract_agmarknet_live_parallel(target_date, max_workers=args.workers, lookback_days=args.lookback_days)
 
         # Step 2: Compute Mathematical Analytics (Zero Mock Strings)
         analytics = compute_live_market_analytics(records)
@@ -983,20 +1015,28 @@ def main():
         execution_time_s=execution_time_s,
         is_success=is_success,
         is_dry_run=args.dry_run,
-        error_msg=error_msg
+        error_msg=error_msg,
+        lookback_days=args.lookback_days
     )
 
     send_teams_notification(card_payload)
 
     # Step 6: Step Summary Reporting (GitHub Actions Clean Output)
+    date_breakdown_lines = ""
+    if len(analytics.get("date_breakdown", {})) > 1:
+        date_breakdown_lines = "\n**Rolling Date Breakdown**:\n" + "\n".join([
+            f"  - `{d}`: {info['records']:,} rows ({info['mandis']} mandis, {info['arrivals_tonnes']:,} T)"
+            for d, info in sorted(analytics.get("date_breakdown", {}).items(), reverse=True)
+        ])
+
     summary_md = f"""### 🌾 GramIQ MandiBhav Daily Ingestion Summary
-- **Trade Date**: `{target_date}`
+- **Trade Date**: `{target_date}` (Lookback: `{args.lookback_days} days`)
 - **Validated Rows Ingested**: `{analytics['record_count']:,}`
 - **Active APMC Mandis**: `{analytics['mandis_count']:,}`
 - **Commodities Reporting**: `{analytics['crops_count']:,}`
 - **States Reporting**: `{analytics['states_count']}`
 - **Total Ingested Volume**: `{analytics['total_arrivals_tonnes']:,} Tonnes`
-- **Execution Runtime**: `{execution_time_s:.2f}s` (Status: `{'🟢 SUCCESS' if is_success else '🔴 FAILED'}`)
+- **Execution Runtime**: `{execution_time_s:.2f}s` (Status: `{'🟢 SUCCESS' if is_success else '🔴 FAILED'}`){date_breakdown_lines}
 
 #### 🤖 AI & Market Intelligence Brief
 > {ai_summary}
