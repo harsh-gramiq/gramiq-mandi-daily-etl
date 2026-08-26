@@ -675,7 +675,7 @@ def generate_gemini_market_brief(analytics: Dict[str, Any], target_date: str) ->
         f"3. Do not include markdown headers or bullet points; output clean text."
     )
 
-    models_to_try = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-pro"]
+    models_to_try = ["gemini-3.7-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash"]
     for model_name in models_to_try:
         try:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
@@ -683,16 +683,23 @@ def generate_gemini_market_brief(analytics: Dict[str, Any], target_date: str) ->
                 "contents": [{"parts": [{"text": prompt}]}],
                 "generationConfig": {
                     "temperature": 0.2,
-                    "maxOutputTokens": 150
+                    "maxOutputTokens": 1024,
+                    "thinkingConfig": {
+                        "thinkingBudget": 0
+                    }
                 }
             }
-            resp = requests.post(url, json=payload, timeout=8)
+            resp = requests.post(url, json=payload, timeout=10)
             if resp.status_code == 200:
                 data = resp.json()
-                text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-                if text:
-                    logger.info(f"✨ Successfully generated authentic Gemini executive brief using {model_name}")
-                    return text
+                candidates = data.get("candidates", [])
+                if candidates:
+                    parts = candidates[0].get("content", {}).get("parts", [])
+                    text_parts = [p.get("text", "") for p in parts if "text" in p]
+                    text = "".join(text_parts).strip()
+                    if text:
+                        logger.info(f"✨ Successfully generated authentic Gemini executive brief using {model_name}")
+                        return text
         except Exception as e:
             logger.warning(f"Gemini generation failed on model {model_name}: {e}")
 
