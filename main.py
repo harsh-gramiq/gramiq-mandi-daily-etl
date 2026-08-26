@@ -458,12 +458,8 @@ def load_records_to_postgres(records: List[Dict[str, Any]]) -> int:
                     SELECT 
                         o.apmc_id,
                         o.commodity,
-                        o.canonical_market,
-                        o.state,
-                        o.district,
                         o.trade_date,
                         o.normalized_modal_price_qtl::DOUBLE PRECISION as price,
-                        o.raw_arrival_quantity::DOUBLE PRECISION as arrival_qty,
                         m.max_date
                     FROM mandi_observations o
                     JOIN max_dates m 
@@ -475,45 +471,34 @@ def load_records_to_postgres(records: List[Dict[str, Any]]) -> int:
                     SELECT 
                         apmc_id,
                         commodity,
-                        MAX(canonical_market) as canonical_market,
-                        MAX(state) as state,
-                        MAX(district) as district,
                         max_date as latest_trade_date,
                         (ARRAY_AGG(price ORDER BY trade_date DESC))[1] as latest_price,
                         MIN(CASE WHEN trade_date >= (max_date - INTERVAL '7 days') THEN price END) as min_price_7d,
                         MAX(CASE WHEN trade_date >= (max_date - INTERVAL '7 days') THEN price END) as max_price_7d,
                         ROUND(AVG(CASE WHEN trade_date >= (max_date - INTERVAL '7 days') THEN price END)::NUMERIC, 2)::DOUBLE PRECISION as avg_price_7d,
-                        ROUND(AVG(price)::NUMERIC, 2)::DOUBLE PRECISION as avg_price_90d,
-                        SUM(CASE WHEN trade_date >= (max_date - INTERVAL '7 days') THEN arrival_qty END) as arrival_volume_7d
+                        ROUND(AVG(price)::NUMERIC, 2)::DOUBLE PRECISION as avg_price_90d
                     FROM recent_slices
                     GROUP BY apmc_id, commodity, max_date
                 )
                 INSERT INTO mandi_price_summary (
-                    apmc_id, commodity, canonical_market, state, district,
-                    latest_trade_date, latest_price, min_price_7d, max_price_7d,
-                    avg_price_7d, avg_price_90d, arrival_volume_7d, updated_at
+                    apmc_id, commodity, latest_trade_date, latest_price,
+                    min_price_7d, max_price_7d, avg_price_7d, avg_price_90d, updated_at
                 )
                 SELECT 
-                    apmc_id, commodity, canonical_market, state, district,
-                    latest_trade_date, latest_price,
+                    apmc_id, commodity, latest_trade_date, latest_price,
                     COALESCE(min_price_7d, latest_price),
                     COALESCE(max_price_7d, latest_price),
                     COALESCE(avg_price_7d, latest_price),
                     COALESCE(avg_price_90d, latest_price),
-                    COALESCE(arrival_volume_7d, 0),
                     NOW()
                 FROM aggregated
                 ON CONFLICT (apmc_id, commodity) DO UPDATE SET
-                    canonical_market = EXCLUDED.canonical_market,
-                    state = EXCLUDED.state,
-                    district = EXCLUDED.district,
                     latest_trade_date = EXCLUDED.latest_trade_date,
                     latest_price = EXCLUDED.latest_price,
                     min_price_7d = EXCLUDED.min_price_7d,
                     max_price_7d = EXCLUDED.max_price_7d,
                     avg_price_7d = EXCLUDED.avg_price_7d,
                     avg_price_90d = EXCLUDED.avg_price_90d,
-                    arrival_volume_7d = EXCLUDED.arrival_volume_7d,
                     updated_at = NOW();
                 """
                 cur.execute(refresh_summary_query, {"apmcs": apmc_list, "comms": comm_list})
