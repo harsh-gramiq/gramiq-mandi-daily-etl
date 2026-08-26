@@ -1,99 +1,80 @@
 # 🌾 GramIQ Daily Mandi ETL Pipeline (`gramiq-mandi-daily-etl`)
 
-Production-grade automated daily APMC Mandi price extraction and ingestion pipeline for **GramIQ Krishi MandiBhav**.
+Production-grade automated daily APMC Mandi price extraction, PostgreSQL ingestion, and **Microsoft Teams Adaptive Card** notification pipeline for **GramIQ Krishi MandiBhav**.
 
-Extracts live commodity modal rates, arrivals, varieties, and grades directly from official **DMI AGMARKNET 2.0 APIs** and streams them into **PostgreSQL** with idempotent SHA-256 deduplication.
+Extracts live commodity modal rates, arrivals, varieties, and grades directly from official **AGMARKNET 2.0 APIs (`api.agmarknet.gov.in`)**, validates and standardizes data, streams records into **PostgreSQL** with idempotent SHA-256 deduplication, and posts rich Adaptive Cards to Microsoft Teams.
 
 ---
 
 ## 🏗️ Architecture & Features
 
-* **Zero Gateway Timeouts**: Uses state-partitioned queries for high-volume staples (Wheat, Cotton, Paddy, Soyabean, Mustard, Chana, Maize, Onion, Potato, Tomato).
-* **Fail-Closed Validation**: Validates that all prices satisfy $P_{\min} \le P_{\text{modal}} \le P_{\max}$ and standardizes units to `INR/Quintal` and `Tonnes`.
+* **AGMARKNET 2.0 Gateway**: State-partitioned extraction for high-volume staples (Wheat, Paddy, Maize, Chana, Mustard, Soyabean, Cotton, Onion, Potato, Tomato, Turmeric, Banana).
+* **Fail-Closed Validation**: Validates $P_{\min} \le P_{\text{modal}} \le P_{\max}$ and standardizes units to `INR/Quintal` and `Tonnes`.
 * **Idempotency & Zero Duplicates**: Calculates a unique SHA-256 `observation_hash` for each market/commodity/trade_date record and executes `ON CONFLICT (observation_hash) DO UPDATE`.
-* **Serverless Daily Cron**: Automatically scheduled via GitHub Actions to run every day at **7:00 PM IST (13:30 UTC)**.
-* **Structured JSON Logging**: Cloud-ready logging schema with ISO 8601 timestamps.
+* **PostgreSQL Planner Warmup**: Automatically triggers `ANALYZE mandi_observations;` post-batch ingestion to keep B-tree index scans fast.
+* **Microsoft Teams Adaptive Cards (v1.4)**: Real-time telemetry cards dispatched directly to your Teams channel/group chat on every pipeline run.
+* **Serverless Scheduled Automation**: Automated via GitHub Actions daily at **7:00 PM IST (13:30 UTC)** and **12:00 AM IST (18:30 UTC)**.
 
 ---
 
-## 🚀 Quick Start (Local Development)
+## ⚙️ GitHub Actions Setup Runbook
 
-### 1. Clone & Setup Virtual Environment
+### 1. Repository Secrets Configuration
+Navigate to your GitHub repository:
+👉 **[https://github.com/harsh-gramiq/gramiq-mandi-daily-etl/settings/secrets/actions](https://github.com/harsh-gramiq/gramiq-mandi-daily-etl/settings/secrets/actions)**
+
+Click **New repository secret** and add the following:
+
+| Secret Name | Description | Example / Format |
+| :--- | :--- | :--- |
+| `PRODUCTION_DB_HOST` | Production PostgreSQL IP / Host | `34.100.185.77` |
+| `PRODUCTION_DB_PORT` | PostgreSQL Port | `5432` |
+| `PRODUCTION_DB_NAME` | Target database name | `app_production` |
+| `PRODUCTION_DB_USERNAME` | Database username | `postgres` |
+| `PRODUCTION_DB_PASSWORD` | Database password | *[Your Secure DB Password]* |
+| `TEAMS_WEBHOOK_URL` | Microsoft Teams Incoming Webhook URL | `https://your-tenant.webhook.office.com/...` |
+
+---
+
+## 💬 How to Get Microsoft Teams Webhook URL
+
+### Option 1: Microsoft Teams Channel Incoming Webhook
+1. Open **Microsoft Teams** and go to your target Channel (or Group Chat).
+2. Click the `•••` (More options) next to the channel name $\rightarrow$ **Connectors** (or **Workflows**).
+3. Search for **Incoming Webhook** $\rightarrow$ Click **Add** / **Configure**.
+4. Name it `GramIQ Mandi ETL Bot` and upload a wheat/leaf icon.
+5. Copy the generated Webhook URL and save it as `TEAMS_WEBHOOK_URL` in GitHub Secrets.
+
+### Option 2: Power Automate Flow ("Post card when a webhook request is received")
+1. In Teams or Power Automate, create an automated cloud flow triggered by **"When a Teams webhook request is received"**.
+2. Add action: **"Post card in a chat or channel"** using the dynamic body.
+3. Copy the HTTP POST URL into GitHub Secrets as `TEAMS_WEBHOOK_URL`.
+
+---
+
+## 🚀 Manual Pipeline Execution (GitHub Actions)
+
+You can trigger a live ingestion anytime from GitHub without code changes:
+
+1. Open **[https://github.com/harsh-gramiq/gramiq-mandi-daily-etl/actions](https://github.com/harsh-gramiq/gramiq-mandi-daily-etl/actions)**.
+2. Select **🌾 GramIQ MandiBhav — Daily National ETL & Teams Sync**.
+3. Click **Run workflow** $\rightarrow$ Optionally enter a specific `trade_date` (e.g. `2026-08-25`) or toggle `dry_run`.
+4. Click **Run workflow**.
+
+---
+
+## 💻 Local Testing Commands
+
 ```bash
-git clone https://github.com/<your-org-or-user>/gramiq-mandi-daily-etl.git
-cd gramiq-mandi-daily-etl
-
-python -m venv .venv
-# On Linux/macOS:
-source .venv/bin/activate
-# On Windows PowerShell:
-.\.venv\Scripts\Activate.ps1
-
+# 1. Install dependencies
 pip install -r requirements.txt
-```
 
-### 2. Configure Environment Variables
-Copy `.env.example` to `.env` and fill in your PostgreSQL credentials:
-```bash
-cp .env.example .env
-```
+# 2. Test Teams Adaptive Card generation & webhook
+python main.py --test-card
 
-### 3. Run Ingestion Engine
-```bash
-# Ingest today's live data
+# 3. Dry run extraction for specific date (prints Adaptive Card JSON)
+python main.py --date 2026-08-25 --dry-run --print-card
+
+# 4. Ingest today's live market data into PostgreSQL
 python main.py
-
-# Ingest a specific trade date
-python main.py --date 2026-08-25
-
-# Dry run (extract and validate without database write)
-python main.py --dry-run
-```
-
----
-
-## ⚙️ GitHub Actions Scheduled Automation Setup
-
-To enable automated daily ingestion on GitHub Cloud:
-
-1. Push this repository to GitHub under your account (e.g. `harsh@gramiq.ai`).
-2. Go to **Settings** $\rightarrow$ **Secrets and variables** $\rightarrow$ **Actions** $\rightarrow$ **New repository secret**.
-3. Add the following secrets:
-   * `DATABASE_URL`: Full PostgreSQL connection string (`postgresql://postgres:<password>@<host>:5432/<dbname>`), **OR**:
-   * `POSTGRES_HOST`: Database host IP or domain.
-   * `POSTGRES_PORT`: `5432`
-   * `POSTGRES_DB`: Database name (`app_production` or `gramiq_mandi`)
-   * `POSTGRES_USER`: Database user (`postgres`)
-   * `POSTGRES_PASSWORD`: Database password
-4. The workflow in `.github/workflows/daily_mandi_ingest.yml` will automatically trigger every day at **7:00 PM IST** (13:30 UTC), and you can also manually trigger it anytime via the **Actions** tab $\rightarrow$ **Run workflow**.
-
----
-
-## 📊 PostgreSQL Database Schema
-
-The pipeline automatically creates the table and analytical views on first run:
-
-```sql
-CREATE TABLE IF NOT EXISTS mandi_observations (
-    observation_hash VARCHAR(64) PRIMARY KEY,
-    source VARCHAR(64) NOT NULL,
-    trade_date DATE NOT NULL,
-    state VARCHAR(128) NOT NULL,
-    district VARCHAR(128) NOT NULL,
-    market VARCHAR(128) NOT NULL,
-    commodity VARCHAR(128) NOT NULL,
-    variety VARCHAR(128),
-    grade VARCHAR(64),
-    raw_min_price NUMERIC(12,2) NOT NULL,
-    raw_modal_price NUMERIC(12,2) NOT NULL,
-    raw_max_price NUMERIC(12,2) NOT NULL,
-    raw_price_unit VARCHAR(32) NOT NULL,
-    normalized_min_price_qtl NUMERIC(12,2) NOT NULL,
-    normalized_modal_price_qtl NUMERIC(12,2) NOT NULL,
-    normalized_max_price_qtl NUMERIC(12,2) NOT NULL,
-    raw_arrival_quantity NUMERIC(12,2),
-    raw_arrival_unit VARCHAR(32),
-    quality_status VARCHAR(32) NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
 ```
