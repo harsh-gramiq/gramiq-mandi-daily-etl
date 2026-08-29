@@ -101,6 +101,19 @@ PRIORITY_COMMODITIES = {
 # WB: 35, OD: 26, BR: 4, AS: 3, KL: 17, CG: 6, JH: 14, UK: 33, HP: 13, JK: 15
 TOP_STAPLE_STATES = [19, 34, 28, 12, 29, 11, 20, 16, 1, 36, 31, 35, 26, 4, 6]
 
+# The AGMARKNET response does not reliably echo stateName on every market block.
+# The stateId in our request is authoritative, so keep a canonical lookup here
+# and never allow missing response metadata to collapse national data into one
+# blank state bucket.
+STATE_NAME_BY_ID: Dict[int, str] = {
+    1: "Andhra Pradesh", 3: "Assam", 4: "Bihar", 6: "Chhattisgarh",
+    11: "Gujarat", 12: "Haryana", 13: "Himachal Pradesh", 14: "Jharkhand",
+    15: "Jammu and Kashmir", 16: "Karnataka", 17: "Kerala", 19: "Madhya Pradesh",
+    20: "Maharashtra", 26: "Odisha", 28: "Punjab", 29: "Rajasthan",
+    31: "Tamil Nadu", 33: "Uttarakhand", 34: "Uttar Pradesh", 35: "West Bengal",
+    36: "Telangana",
+}
+
 PRODUCING_STATES: Dict[int, List[int]] = {
     1: [19, 34, 28, 29, 11, 20, 12, 4, 6],           # Wheat: MP, UP, PB, RJ, GJ, MH, HR, BR, CG
     2: [28, 34, 19, 12, 11, 20, 16, 1, 36, 31, 35, 26, 4, 6, 3], # Paddy: PB, UP, MP, HR, GJ, MH, KA, AP, TS, TN, WB, OD, BR, CG, AS
@@ -184,7 +197,15 @@ def fetch_single_task(session: requests.Session, task_payload: Tuple[int, str, s
             for m_block in raw_data.get("markets", []):
                 market_name = str(m_block.get("marketName", "")).strip()
                 clean_mkt = market_name.replace(" APMC", "").replace(" Mandi", "").replace("(APMC)", "").replace("(Mandi)", "").strip()
-                state_name = str(m_block.get("stateName") or "").strip()
+                requested_state_name = STATE_NAME_BY_ID.get(int(s_id))
+                response_state_name = str(m_block.get("stateName") or "").strip()
+                # Prefer the canonical name for the requested partition. Some
+                # AGMARKNET responses omit stateName, and some older responses
+                # return a stale value copied from the first market block.
+                state_name = requested_state_name or response_state_name
+                if not state_name:
+                    logger.warning(f"Missing state metadata for AGMARKNET stateId={s_id}; skipping market block")
+                    continue
                 district_name = str(m_block.get("districtName") or clean_mkt).strip()
 
                 for day in m_block.get("dates", []):
