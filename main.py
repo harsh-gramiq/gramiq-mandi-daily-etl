@@ -37,6 +37,12 @@ from urllib3.util import Retry
 from requests.adapters import HTTPAdapter
 import pandas as pd
 
+from app.analytics import compute_live_market_analytics as compute_modular_market_analytics
+from app.config import PRIORITY_COMMODITIES as CONFIG_PRIORITY_COMMODITIES
+from app.config import PRODUCING_STATES as CONFIG_PRODUCING_STATES
+from app.config import STATE_NAME_BY_ID as CONFIG_STATE_NAME_BY_ID
+from app.config import TOP_STAPLE_STATES as CONFIG_TOP_STAPLE_STATES
+
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 if hasattr(sys.stderr, "reconfigure"):
@@ -145,6 +151,13 @@ PRODUCING_STATES: Dict[int, List[int]] = {
     61: [11, 29],                                     # Cumin (Jeera): GJ, RJ
     65: [36, 31, 20, 1, 26, 16, 35, 3]               # Turmeric: TS, TN, MH, AP, OD, KA, WB, AS
 }
+
+# Keep the legacy module-level names for compatibility while making the package
+# configuration the single source used by the pipeline.
+PRIORITY_COMMODITIES = CONFIG_PRIORITY_COMMODITIES
+TOP_STAPLE_STATES = CONFIG_TOP_STAPLE_STATES
+STATE_NAME_BY_ID = CONFIG_STATE_NAME_BY_ID
+PRODUCING_STATES = CONFIG_PRODUCING_STATES
 
 def compute_observation_hash(source: str, trade_date: str, state: str, market: str, commodity: str, variety: str, grade: str) -> str:
     token = f"{source}|{trade_date}|{state.strip().upper()}|{market.strip().upper()}|{commodity.strip().upper()}|{(variety or '').strip().upper()}|{(grade or '').strip().upper()}"
@@ -1011,7 +1024,7 @@ def main():
         records = extract_agmarknet_live_parallel(target_date, max_workers=args.workers, lookback_days=args.lookback_days)
 
         # Step 2: Compute Mathematical Analytics (Zero Mock Strings)
-        analytics = compute_live_market_analytics(records)
+        analytics = compute_modular_market_analytics(records)
 
         # Step 3: Database Load & Incremental Summary Refresh
         if not args.dry_run:
@@ -1026,7 +1039,7 @@ def main():
         is_success = False
         error_msg = str(e)
         logger.error(f"Pipeline execution failed: {e}", exc_info=True)
-        analytics = compute_live_market_analytics(records)
+        analytics = compute_modular_market_analytics(records)
         ai_summary = f"Pipeline execution encountered an error: {error_msg}"
 
     execution_time_s = time.time() - start_time
