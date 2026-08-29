@@ -748,12 +748,17 @@ def build_teams_adaptive_card(
     is_success: bool,
     is_dry_run: bool = False,
     error_msg: Optional[str] = None,
-    lookback_days: int = 3
+    lookback_days: int = 3,
+    run_mode: str = "final"
 ) -> dict:
     """Builds an enterprise Microsoft Teams Adaptive Card v1.5 with real metrics and collapsible accordions."""
     now_ist_str = datetime.now(timezone.utc).strftime("%d %B %Y | %I:%M %p UTC")
 
-    status_title = "🌾 GramIQ MandiBhav Daily Ingestion Brief"
+    is_preliminary = run_mode == "preliminary"
+    status_title = (
+        "🟡 Preliminary Market Update" if is_preliminary
+        else "🟢 Final Reconciliation Report"
+    )
     if is_dry_run:
         status_title += " [DRY RUN]"
     elif not is_success:
@@ -765,6 +770,12 @@ def build_teams_adaptive_card(
     sub_title = f"Trade Date: {target_date} • Dispatched at {now_ist_str}"
     if lookback_days > 1:
         sub_title = f"Trade Date: {target_date} (Rolling {lookback_days}-Day Window) • Dispatched at {now_ist_str}"
+
+    run_note = (
+        "Preliminary snapshot: late state submissions may arrive in the final reconciliation run."
+        if is_preliminary else
+        "Authoritative daily snapshot after the rolling lookback reconciliation."
+    )
 
     # Top Spreads FactSet
     spread_facts = []
@@ -831,6 +842,12 @@ def build_teams_adaptive_card(
                                     ]
                                 }
                             ]
+                        },
+
+                        {
+                            "type": "Container",
+                            "style": "warning" if is_preliminary else "good",
+                            "items": [{"type": "TextBlock", "text": f"{'⏳' if is_preliminary else '✅'} {run_note}", "wrap": True, "size": "Small", "weight": "Bolder"}]
                         },
 
                         # 4-Column Metric Snapshot
@@ -972,6 +989,7 @@ def main():
     parser.add_argument("--workers", type=int, default=8, help="Number of concurrent extractor worker threads")
     parser.add_argument("--dry-run", action="store_true", help="Dry run mode (extract and calculate without DB write)")
     parser.add_argument("--print-card", action="store_true", help="Print card summary to stdout/GITHUB_STEP_SUMMARY")
+    parser.add_argument("--run-mode", choices=["preliminary", "final"], default=os.getenv("MANDI_RUN_MODE", "final"), help="Teams card mode: preliminary or final reconciliation")
     args = parser.parse_args()
 
     start_time = time.time()
@@ -1022,7 +1040,8 @@ def main():
         is_success=is_success,
         is_dry_run=args.dry_run,
         error_msg=error_msg,
-        lookback_days=args.lookback_days
+        lookback_days=args.lookback_days,
+        run_mode=args.run_mode
     )
 
     send_teams_notification(card_payload)
@@ -1035,7 +1054,14 @@ def main():
             for d, info in sorted(analytics.get("date_breakdown", {}).items(), reverse=True)
         ])
 
-    summary_md = f"""### 🌾 GramIQ MandiBhav Daily Ingestion Summary
+    mode_label = "🟡 Preliminary Market Update" if args.run_mode == "preliminary" else "🟢 Final Reconciliation Report"
+    mode_note = (
+        "Late state submissions may still arrive in the final reconciliation run."
+        if args.run_mode == "preliminary" else
+        "Authoritative daily snapshot after the rolling lookback reconciliation."
+    )
+    summary_md = f"""### 🌾 GramIQ MandiBhav — {mode_label}
+- **Run Type**: {mode_note}
 - **Trade Date**: `{target_date}` (Lookback: `{args.lookback_days} days`)
 - **Validated Rows Ingested**: `{analytics['record_count']:,}`
 - **Active APMC Mandis**: `{analytics['mandis_count']:,}`

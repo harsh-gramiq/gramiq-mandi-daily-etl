@@ -63,6 +63,7 @@ jobs:
           # Google Gemini AI Key
           GEMINI_API_KEY_OG: ${{ secrets.GEMINI_API_KEY_OG }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          MANDI_RUN_MODE: ${{ github.event.schedule == '30 13 * * 1-6' && 'preliminary' || 'final' }}
         run: |
           CMD_ARGS="--print-card"
           if [ -n "${{ github.event.inputs.trade_date }}" ]; then
