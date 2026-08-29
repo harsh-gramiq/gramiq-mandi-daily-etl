@@ -22,7 +22,14 @@ The pipeline is deliberately fail-closed: invalid prices are rejected, state att
 ├── app/
 │   ├── analytics.py       # Pure market analytics
 │   └── config.py          # Commodity and AGMARKNET state partitions
-├── main.py               # CLI and pipeline compatibility entrypoint
+├── main.py               # Nine-line CLI entrypoint
+├── app/
+│   ├── pipeline.py       # Backward-compatible orchestration implementation
+│   ├── extractors/       # AGMARKNET extraction boundary
+│   ├── storage/          # PostgreSQL persistence boundary
+│   ├── notifications/    # Teams and Gemini boundaries
+│   ├── analytics.py      # Pure market analytics
+│   └── config.py         # Commodity and state configuration
 ├── test_main.py          # Deterministic regression tests
 ├── .github/workflows/
 │   ├── ci.yml             # Tests and syntax checks
@@ -30,7 +37,7 @@ The pipeline is deliberately fail-closed: invalid prices are rejected, state att
 └── LOGS_AUDIT_REPORT.md   # Historical ingestion audit and findings
 ```
 
-The remaining database, extractor, Gemini, and Teams functions are currently kept in `main.py` for backward compatibility. They are the next safe extraction boundaries as the project grows.
+`app/pipeline.py` retains the mature implementation while the surrounding modules provide stable boundaries for callers and incremental future extraction. The CLI no longer owns business logic.
 
 ## Requirements
 
