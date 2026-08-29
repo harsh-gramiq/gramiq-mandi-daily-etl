@@ -1,80 +1,147 @@
-# 🌾 GramIQ Daily Mandi ETL Pipeline (`gramiq-mandi-daily-etl`)
+# GramIQ MandiBhav Daily ETL
 
-Production-grade automated daily APMC Mandi price extraction, PostgreSQL ingestion, and **Microsoft Teams Adaptive Card** notification pipeline for **GramIQ Krishi MandiBhav**.
+Production Python pipeline for collecting APMC mandi prices and arrivals from the official AGMARKNET 2.0 gateway, validating observations, loading PostgreSQL, and publishing Microsoft Teams Adaptive Card reports.
 
-Extracts live commodity modal rates, arrivals, varieties, and grades directly from official **AGMARKNET 2.0 APIs (`api.agmarknet.gov.in`)**, validates and standardizes data, streams records into **PostgreSQL** with idempotent SHA-256 deduplication, and posts rich Adaptive Cards to Microsoft Teams.
+The pipeline is deliberately fail-closed: invalid prices are rejected, state attribution comes from the requested AGMARKNET partition, and database writes use an observation hash for idempotency.
 
----
+## What it does
 
-## 🏗️ Architecture & Features
+- Queries configured commodity/state partitions concurrently through a pooled HTTP client.
+- Collects a rolling lookback window so late mandi submissions can be reconciled.
+- Normalizes prices to INR per quintal and arrivals to tonnes.
+- Validates `min_price <= modal_price <= max_price`.
+- Upserts observations into PostgreSQL and refreshes the summary table.
+- Calculates real volume, state, date, and inter-mandi spread analytics.
+- Generates a Gemini brief when configured, with a quantitative fallback when unavailable.
+- Sends either a preliminary or final Teams report.
 
-* **AGMARKNET 2.0 Gateway**: State-partitioned extraction for high-volume staples (Wheat, Paddy, Maize, Chana, Mustard, Soyabean, Cotton, Onion, Potato, Tomato, Turmeric, Banana).
-* **Fail-Closed Validation**: Validates $P_{\min} \le P_{\text{modal}} \le P_{\max}$ and standardizes units to `INR/Quintal` and `Tonnes`.
-* **Idempotency & Zero Duplicates**: Calculates a unique SHA-256 `observation_hash` for each market/commodity/trade_date record and executes `ON CONFLICT (observation_hash) DO UPDATE`.
-* **PostgreSQL Planner Warmup**: Automatically triggers `ANALYZE mandi_observations;` post-batch ingestion to keep B-tree index scans fast.
-* **Microsoft Teams Adaptive Cards (v1.4)**: Real-time telemetry cards dispatched directly to your Teams channel/group chat on every pipeline run.
-* **Serverless Scheduled Automation**: Automated via GitHub Actions daily at **7:00 PM IST (13:30 UTC)** and **12:00 AM IST (18:30 UTC)**.
+## Repository layout
 
----
+```text
+.
+├── app/
+│   ├── analytics.py       # Pure market analytics
+│   └── config.py          # Commodity and AGMARKNET state partitions
+├── main.py               # CLI and pipeline compatibility entrypoint
+├── test_main.py          # Deterministic regression tests
+├── .github/workflows/
+│   ├── ci.yml             # Tests and syntax checks
+│   └── daily_mandi_ingest.yml
+└── LOGS_AUDIT_REPORT.md   # Historical ingestion audit and findings
+```
 
-## ⚙️ GitHub Actions Setup Runbook
+The remaining database, extractor, Gemini, and Teams functions are currently kept in `main.py` for backward compatibility. They are the next safe extraction boundaries as the project grows.
 
-### 1. Repository Secrets Configuration
-Navigate to your GitHub repository:
-👉 **[https://github.com/harsh-gramiq/gramiq-mandi-daily-etl/settings/secrets/actions](https://github.com/harsh-gramiq/gramiq-mandi-daily-etl/settings/secrets/actions)**
+## Requirements
 
-Click **New repository secret** and add the following:
+- Python 3.11+
+- PostgreSQL with the GramIQ mandi schema
+- AGMARKNET 2.0 network access
+- Optional Google Gemini API key
+- Optional Microsoft Teams webhook
 
-| Secret Name | Description | Example / Format |
-| :--- | :--- | :--- |
-| `PRODUCTION_DB_HOST` | Production PostgreSQL IP / Host | `34.100.185.77` |
-| `PRODUCTION_DB_PORT` | PostgreSQL Port | `5432` |
-| `PRODUCTION_DB_NAME` | Target database name | `app_production` |
-| `PRODUCTION_DB_USERNAME` | Database username | `postgres` |
-| `PRODUCTION_DB_PASSWORD` | Database password | *[Your Secure DB Password]* |
-| `TEAMS_WEBHOOK_URL` | Microsoft Teams Incoming Webhook URL | `https://your-tenant.webhook.office.com/...` |
-
----
-
-## 💬 How to Get Microsoft Teams Webhook URL
-
-### Option 1: Microsoft Teams Channel Incoming Webhook
-1. Open **Microsoft Teams** and go to your target Channel (or Group Chat).
-2. Click the `•••` (More options) next to the channel name $\rightarrow$ **Connectors** (or **Workflows**).
-3. Search for **Incoming Webhook** $\rightarrow$ Click **Add** / **Configure**.
-4. Name it `GramIQ Mandi ETL Bot` and upload a wheat/leaf icon.
-5. Copy the generated Webhook URL and save it as `TEAMS_WEBHOOK_URL` in GitHub Secrets.
-
-### Option 2: Power Automate Flow ("Post card when a webhook request is received")
-1. In Teams or Power Automate, create an automated cloud flow triggered by **"When a Teams webhook request is received"**.
-2. Add action: **"Post card in a chat or channel"** using the dynamic body.
-3. Copy the HTTP POST URL into GitHub Secrets as `TEAMS_WEBHOOK_URL`.
-
----
-
-## 🚀 Manual Pipeline Execution (GitHub Actions)
-
-You can trigger a live ingestion anytime from GitHub without code changes:
-
-1. Open **[https://github.com/harsh-gramiq/gramiq-mandi-daily-etl/actions](https://github.com/harsh-gramiq/gramiq-mandi-daily-etl/actions)**.
-2. Select **🌾 GramIQ MandiBhav — Daily National ETL & Teams Sync**.
-3. Click **Run workflow** $\rightarrow$ Optionally enter a specific `trade_date` (e.g. `2026-08-25`) or toggle `dry_run`.
-4. Click **Run workflow**.
-
----
-
-## 💻 Local Testing Commands
+Install dependencies in a virtual environment:
 
 ```bash
-# 1. Install dependencies
-pip install -r requirements.txt
-
-# 2. Test Teams Adaptive Card generation & webhook
-python main.py --test-card
-
-# 3. Dry run extraction for specific date (prints Adaptive Card JSON)
-python main.py --date 2026-08-25 --dry-run --print-card
-
-# 4. Ingest today's live market data into PostgreSQL
-python main.py
+python -m venv .venv
+# Linux/macOS: source .venv/bin/activate
+# Windows: .venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
 ```
+
+## Configuration
+
+Copy `.env.example` to `.env` for local development. Never commit `.env` or credentials.
+
+Required for a live database run:
+
+| Variable | Purpose |
+|---|---|
+| `PRODUCTION_DB_HOST` | PostgreSQL hostname |
+| `PRODUCTION_DB_PORT` | PostgreSQL port |
+| `PRODUCTION_DB_NAME` | Database name |
+| `PRODUCTION_DB_USERNAME` | Database user |
+| `PRODUCTION_DB_PASSWORD` | Database password |
+
+Optional:
+
+| Variable | Purpose |
+|---|---|
+| `TEAMS_WEBHOOK_URL` | Teams webhook destination |
+| `GEMINI_API_KEY_OG` or `GEMINI_API_KEY` | Gemini market brief generation |
+| `GEMINI_KEY_POOL` | Comma-separated Gemini key pool fallback |
+
+GitHub Actions uses repository secrets with the same names.
+
+## Run locally
+
+Run deterministic tests:
+
+```bash
+python test_main.py
+python -m py_compile main.py app/*.py test_main.py
+```
+
+Run a dry extraction and print the GitHub-style summary:
+
+```bash
+python main.py --date 2026-08-29 --lookback-days 3 --dry-run --print-card
+```
+
+Run a live ingestion:
+
+```bash
+python main.py --lookback-days 3
+```
+
+Useful options:
+
+```text
+--date YYYY-MM-DD       Trade date; defaults to today
+--lookback-days N       Rolling extraction window; defaults to 3
+--workers N             Concurrent HTTP workers; defaults to 8
+--dry-run               Skip PostgreSQL writes
+--run-mode preliminary  Label the Teams report as an early snapshot
+--run-mode final        Label the Teams report as authoritative
+--print-card            Write a Markdown summary to stdout
+```
+
+## Scheduled reports
+
+The workflow runs Monday through Saturday:
+
+| UTC | IST | Report |
+|---|---|---|
+| 13:30 | 19:00 | Preliminary Market Update; late state submissions may still arrive |
+| 18:30 | 00:00 | Final Reconciliation Report; authoritative rolling snapshot |
+
+Manual workflow runs default to the final report format. Both runs are safe to repeat because observations are upserted idempotently.
+
+## Data quality and state attribution
+
+AGMARKNET does not consistently return `stateName` in every market block. The requested `stateId` is therefore authoritative and is resolved through `app/config.py`. This prevents missing or stale response metadata from collapsing national analytics into a single blank state.
+
+The pipeline rejects non-positive prices and inverted price bounds. Check the structured workflow logs and the Teams state breakdown when coverage looks suspicious.
+
+## CI and release checklist
+
+Every change should pass:
+
+```bash
+python test_main.py
+python -m py_compile main.py app/*.py test_main.py
+```
+
+Before a production run, confirm that database, webhook, and optional Gemini secrets exist in GitHub Actions. Do not print secret values, include them in URLs, or add `.env` files to commits.
+
+## Security and operations
+
+- Treat webhook URLs and database credentials as secrets.
+- Rotate credentials immediately if they appear in logs or commits.
+- Use dry-run mode to validate extraction without database writes.
+- Review state counts, date counts, accepted rows, and database upsert results—not only the process exit code.
+- See `LOGS_AUDIT_REPORT.md` for the previous one-state incident and remediation history.
+
+## License
+
+No license has been declared yet. Until the repository owner adds one, all rights remain with the copyright holder.
