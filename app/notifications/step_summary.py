@@ -51,6 +51,16 @@ def write_github_step_summary(
 
             f.write(f"### 🤖 AI Market Intelligence Brief\n> {ai_brief}\n\n")
 
+            if metrics.get("crop_counts"):
+                f.write("### 🌾 Top Commodities by Arrival Volume & Average Modal Rates\n\n")
+                f.write("| Commodity | Volume (Tonnes) | Active APMCs | Avg Modal Rate | Price Range |\n")
+                f.write("| :--- | :--- | :--- | :--- | :--- |\n")
+                for crop, d in list(metrics["crop_counts"].items())[:15]:
+                    f.write(
+                        f"| **{crop}** | **{d['volume']:,} T** | {d['mandis']} APMCs | **₹{d['avg_price']:,.0f}/Qtl** | ₹{d['min_price']:,.0f} - ₹{d['max_price']:,.0f} |\n"
+                    )
+                f.write("\n")
+
             if metrics.get("spreads"):
                 f.write("### 📈 Top Clean Inter-Mandi Spreads (Outlier Scrubbed)\n\n")
                 f.write("| Commodity | Min Price | Median Price | Max Price | Spread % | Volume |\n")

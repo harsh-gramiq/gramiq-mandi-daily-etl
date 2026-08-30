@@ -57,6 +57,12 @@ class TestMarketAnalytics(unittest.TestCase):
         self.assertEqual(metrics["state_counts"]["Madhya Pradesh"]["rows"], 3)
         self.assertEqual(metrics["state_counts"]["Madhya Pradesh"]["mandis"], 2)
         self.assertEqual(metrics["state_counts"]["Punjab"]["rows"], 1)
+        self.assertIn("Wheat", metrics["crop_counts"])
+        self.assertEqual(metrics["crop_counts"]["Wheat"]["rows"], 4)
+        self.assertEqual(metrics["crop_counts"]["Wheat"]["mandis"], 3)
+        self.assertEqual(metrics["crop_counts"]["Wheat"]["volume"], 500.0)
+        self.assertEqual(metrics["crop_counts"]["Wheat"]["min_price"], 2480.0)
+        self.assertEqual(metrics["crop_counts"]["Wheat"]["max_price"], 2600.0)
 
 
 if __name__ == "__main__":

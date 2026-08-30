@@ -39,6 +39,10 @@ class TestNotifications(unittest.TestCase):
                 "Madhya Pradesh": {"rows": 2000, "mandis": 110, "volume": 18000.0},
                 "Rajasthan": {"rows": 1500, "mandis": 90, "volume": 12000.0},
             },
+            "crop_counts": {
+                "Wheat": {"rows": 2000, "mandis": 110, "volume": 18000.0, "avg_price": 2450.0, "min_price": 2200.0, "max_price": 2700.0},
+                "Chana(Gram)": {"rows": 1500, "mandis": 90, "volume": 12000.0, "avg_price": 6100.0, "min_price": 5400.0, "max_price": 7200.0},
+            },
         }
 
     def test_gemini_fallback_without_api_key(self):
@@ -61,9 +65,22 @@ class TestNotifications(unittest.TestCase):
         self.assertEqual(content["version"], "1.5")
         self.assertEqual(content["$schema"], "http://adaptivecards.io/schemas/adaptive-card.json")
 
-        # Verify Toggle Visibility action exists
+        # Verify crop dropdown Input.ChoiceSet exists
+        body_elements = content.get("body", [])
+        choice_sets = [e for e in body_elements if e.get("type") == "Input.ChoiceSet"]
+        self.assertTrue(len(choice_sets) >= 1)
+        crop_selector = choice_sets[0]
+        self.assertEqual(crop_selector.get("id"), "cropSelector")
+        self.assertEqual(crop_selector.get("style"), "compact")
+        self.assertTrue(any(c["value"] == "Wheat" for c in crop_selector.get("choices", [])))
+
+        # Verify Toggle Visibility actions exist for both states and crops
         actions = content.get("actions", [])
-        self.assertTrue(any(a["type"] == "Action.ToggleVisibility" for a in actions))
+        toggle_actions = [a for a in actions if a.get("type") == "Action.ToggleVisibility"]
+        self.assertTrue(len(toggle_actions) >= 2)
+        target_ids = [t for a in toggle_actions for t in a.get("targetElements", [])]
+        self.assertIn("cropBreakdownContainer", target_ids)
+        self.assertIn("stateBreakdownContainer", target_ids)
 
     def test_github_step_summary_writer(self):
         with tempfile.NamedTemporaryFile(mode="w+", delete=False, encoding="utf-8") as tf:
