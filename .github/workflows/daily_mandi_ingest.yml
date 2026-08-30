@@ -1,12 +1,4 @@
-name: 🌾 GramIQ MandiBhav — Daily National ETL & Teams Sync
-
-on:
-  schedule:
-    # Primary Sync: Monday through Saturday at 13:30 UTC (7:00 PM IST) — Peak national closing
-    - cron: '30 13 * * 1-6'
-    # Night Reconciliation: Monday through Saturday at 18:30 UTC (12:00 AM IST) — Complete reconciliation
-    - cron: '30 18 * * 1-6'
-name: 🌾 GramIQ MandiBhav — Daily National ETL & Teams Sync
+name: 🌾 Daily National Mandi Ingestion & Teams Sync
 
 on:
   schedule:
