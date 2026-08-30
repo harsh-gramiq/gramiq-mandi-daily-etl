@@ -18,7 +18,7 @@ class TestPipelineOrchestrator(unittest.TestCase):
         mock_upsert,
         mock_extract,
     ):
-        mock_extract.return_value = [
+        mock_records = [
             {
                 "observation_hash": "h1",
                 "source": "Agmarknet_API",
@@ -42,6 +42,26 @@ class TestPipelineOrchestrator(unittest.TestCase):
                 "created_at": "2026-08-29T12:00:00Z",
             }
         ]
+        mock_telemetry = {
+            "total_tasks_probed": 100,
+            "tasks_with_data": 80,
+            "tasks_market_closed": 20,
+            "tasks_rate_limited_recovered": 5,
+            "tasks_rate_limited_failed": 0,
+            "tasks_network_failed": 0,
+            "total_monitored_states": 31,
+            "active_states_count": 28,
+            "active_states": ["Madhya Pradesh"],
+            "missing_states": ["Sikkim", "Lakshadweep", "Goa"],
+            "total_monitored_crops": 348,
+            "active_crops_count": 65,
+            "active_crops": ["Wheat"],
+            "missing_crops": [],
+            "elapsed_seconds": 12.4,
+            "task_details": [],
+        }
+
+        mock_extract.return_value = (mock_records, mock_telemetry)
 
         result = run_pipeline(
             target_date="2026-08-29",
@@ -55,6 +75,7 @@ class TestPipelineOrchestrator(unittest.TestCase):
         self.assertEqual(result["target_date"], "2026-08-29")
         self.assertEqual(result["total_records"], 1)
         self.assertEqual(result["db_upserted"], 0)
+        self.assertIn("telemetry", result)
         mock_extract.assert_called_once()
         mock_upsert.assert_not_called()  # Dry run should skip DB write
         mock_dispatch.assert_called_once()

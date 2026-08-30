@@ -7,6 +7,7 @@ import time
 from typing import Any, Optional
 
 from app.analytics import compute_clean_market_analytics
+from app.config import Config
 from app.extractors import extract_national_agmarknet_parallel
 from app.notifications import (
     build_adaptive_card,
@@ -25,19 +26,19 @@ if sys.stdout and hasattr(sys.stdout, "reconfigure"):
 
 def run_pipeline(
     target_date: str = "",
-    lookback_days: int = 7,
-    workers: int = 24,
+    lookback_days: int = Config.DEFAULT_LOOKBACK_DAYS,
+    workers: int = Config.DEFAULT_WORKERS,
     dry_run: bool = False,
     print_card: bool = False,
     matrix_path: Optional[str] = None,
 ) -> dict[str, Any]:
     """
     Executes the full national MandiBhav ETL and 7-day rolling reconciliation workflow:
-    1. Multi-threaded block harvesting across all crops and states
-    2. Statistical IQR/Median outlier scrubbing and clean spread analysis
+    1. Multi-threaded block harvesting with round-robin state scheduling & backoff
+    2. Statistical IQR/Median outlier scrubbing and clean spread analysis with gap telemetry
     3. Idempotent PostgreSQL/Supabase batched ingestion & summary refresh
     4. Authentic Gemini AI market brief generation with agronomic guardrails
-    5. Microsoft Teams Adaptive Card v1.5 construction and dispatch
+    5. Microsoft Teams Adaptive Card v1.5 construction with data gap container & dispatch
     6. GitHub Actions step summary markdown generation
     """
     t_start = time.time()
@@ -47,12 +48,12 @@ def run_pipeline(
     print(f"🌾 [GramIQ MandiBhav] National Daily ETL & 7-Day Rolling Reconciliation")
     print(f"   Target Date   : {effective_date}")
     print(f"   Lookback Days : {lookback_days} days")
-    print(f"   Concurrency   : {workers} workers")
+    print(f"   Concurrency   : {workers} workers (Paced & State-Interleaved)")
     print(f"   Execution Mode: {'DRY RUN (No DB Write)' if dry_run else 'PRODUCTION LIVE'}")
     print("=" * 85)
 
-    # 1. High-speed multi-threaded extraction
-    records = extract_national_agmarknet_parallel(
+    # 1. High-speed multi-threaded extraction with rate-limit resilience
+    records, telemetry = extract_national_agmarknet_parallel(
         target_date_iso=effective_date,
         lookback_days=lookback_days,
         max_workers=workers,
@@ -61,11 +62,12 @@ def run_pipeline(
 
     # 2. Statistical Outlier Scrubbing & Clean Arbitrage Analytics
     print("\n🔍 Computing clean market analytics and outlier-scrubbed spreads...")
-    metrics = compute_clean_market_analytics(records, effective_date)
+    metrics = compute_clean_market_analytics(records, effective_date, telemetry=telemetry)
     print(
         f"   + Validated Rows: {metrics['total_rows']:,} across {metrics['active_commodities']} commodities in {metrics['active_states']} states"
     )
     print(f"   + Clean Spreads Computed: {len(metrics['spreads'])} commodities")
+    print(f"   + Pipeline Reliability: {metrics['tasks_with_data']}/{metrics['total_tasks_probed']} tasks active | {metrics['tasks_market_closed']} closed/off-season | {metrics['tasks_failed']} failed")
 
     # 3. Database Upsert & Summary Refresh
     db_upserted = 0
@@ -108,4 +110,5 @@ def run_pipeline(
         "ai_brief": ai_brief,
         "card": card,
         "db_upserted": db_upserted,
+        "telemetry": telemetry,
     }

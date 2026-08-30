@@ -12,7 +12,8 @@ def build_adaptive_card(
 ) -> dict[str, Any]:
     """
     Constructs the Microsoft Teams Adaptive Card v1.5 payload with clear date disambiguation,
-    clean outlier-scrubbed spreads, and interactive toggleable state breakdown.
+    clean outlier-scrubbed spreads, interactive toggleable state breakdown, and
+    pipeline reliability / data gap telemetry.
     """
     # Date breakdown text
     date_counts = metrics.get("date_counts", {})
@@ -27,13 +28,46 @@ def build_adaptive_card(
             "value": f"{s['spread_pct']}% Spread (₹{s['min_price']:,.0f} - ₹{s['max_price']:,.0f} / Qtl)",
         })
 
-    # State breakdown facts for toggle container
+    # State breakdown facts for toggle container (top 20 reporting states)
     state_facts = []
-    for st, d in list(metrics.get("state_counts", {}).items())[:18]:
+    for st, d in list(metrics.get("state_counts", {}).items())[:20]:
         state_facts.append({
             "title": f"📍 {st}",
             "value": f"{d['rows']:,} rows | {d['mandis']} APMCs | {d['volume']:,} T",
         })
+
+    # Gap telemetry facts
+    missing_states = metrics.get("missing_states", [])
+    missing_crops = metrics.get("missing_crops", [])
+    failed_tasks_count = metrics.get("tasks_failed", 0)
+    recovered_tasks_count = metrics.get("telemetry", {}).get("tasks_rate_limited_recovered", 0)
+
+    gap_facts = [
+        {
+            "title": "📍 Non-Reporting States",
+            "value": (
+                f"{len(missing_states)} states ({', '.join(missing_states[:6])}{'...' if len(missing_states) > 6 else ''})"
+                if missing_states
+                else "None (100% National Coverage)"
+            ),
+        },
+        {
+            "title": "🌾 Off-Season / No Arrivals",
+            "value": (
+                f"{len(missing_crops)} crops with 0 arrivals in trailing 7 days"
+                if missing_crops
+                else "None"
+            ),
+        },
+        {
+            "title": "🔄 Rate-Limit Retries Recovered",
+            "value": f"{recovered_tasks_count} tasks automatically recovered with backoff",
+        },
+        {
+            "title": "❌ Unrecoverable Failures",
+            "value": f"{failed_tasks_count} tasks failed after max retries",
+        },
+    ]
 
     card = {
         "type": "message",
@@ -215,6 +249,77 @@ def build_adaptive_card(
                                 },
                             ]
                             + spread_facts,
+                        },
+                        {
+                            "type": "TextBlock",
+                            "text": "🔍 PIPELINE RELIABILITY & DATA GAP TELEMETRY",
+                            "weight": "Bolder",
+                            "size": "Medium",
+                            "spacing": "Medium",
+                        },
+                        {
+                            "type": "ColumnSet",
+                            "columns": [
+                                {
+                                    "type": "Column",
+                                    "width": "1",
+                                    "items": [
+                                        {"type": "TextBlock", "text": "TASKS PROBED", "size": "Small", "isSubtle": True},
+                                        {
+                                            "type": "TextBlock",
+                                            "text": f"{metrics.get('total_tasks_probed', 0):,}",
+                                            "size": "Medium",
+                                            "weight": "Bolder",
+                                        },
+                                    ],
+                                },
+                                {
+                                    "type": "Column",
+                                    "width": "1",
+                                    "items": [
+                                        {"type": "TextBlock", "text": "ACTIVE DATA", "size": "Small", "isSubtle": True},
+                                        {
+                                            "type": "TextBlock",
+                                            "text": f"{metrics.get('tasks_with_data', 0):,}",
+                                            "size": "Medium",
+                                            "weight": "Bolder",
+                                            "color": "Good",
+                                        },
+                                    ],
+                                },
+                                {
+                                    "type": "Column",
+                                    "width": "1",
+                                    "items": [
+                                        {"type": "TextBlock", "text": "MARKETS CLOSED", "size": "Small", "isSubtle": True},
+                                        {
+                                            "type": "TextBlock",
+                                            "text": f"{metrics.get('tasks_market_closed', 0):,}",
+                                            "size": "Medium",
+                                            "weight": "Bolder",
+                                            "color": "Warning",
+                                        },
+                                    ],
+                                },
+                                {
+                                    "type": "Column",
+                                    "width": "1",
+                                    "items": [
+                                        {"type": "TextBlock", "text": "NETWORK FAILS", "size": "Small", "isSubtle": True},
+                                        {
+                                            "type": "TextBlock",
+                                            "text": f"{failed_tasks_count}",
+                                            "size": "Medium",
+                                            "weight": "Bolder",
+                                            "color": "Attention" if failed_tasks_count > 0 else "Good",
+                                        },
+                                    ],
+                                },
+                            ],
+                        },
+                        {
+                            "type": "FactSet",
+                            "facts": gap_facts,
                         },
                         {
                             "type": "Container",

@@ -1,16 +1,23 @@
-"""Statistical Outlier Scrubbing & Clean Arbitrage Analytics."""
+"""Statistical Outlier Scrubbing, Clean Arbitrage & Pipeline Gap Analytics."""
 
 import collections
 from typing import Any
 
 
-def compute_clean_market_analytics(records: list[dict[str, Any]], target_date_iso: str) -> dict[str, Any]:
+def compute_clean_market_analytics(
+    records: list[dict[str, Any]],
+    target_date_iso: str,
+    telemetry: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """
     Computes rigorous market analytics with IQR/Median outlier scrubbing to prevent
     clerical typos (₹700 Chana or ₹13,200 Maize) from distorting spread highlights.
+    Integrates comprehensive extraction telemetry and data gap diagnostics.
 
     Clamps price outliers outside [0.35 * median, 2.5 * median] for robust spread analysis.
     """
+    telem = telemetry or {}
+
     if not records:
         return {
             "total_rows": 0,
@@ -25,6 +32,15 @@ def compute_clean_market_analytics(records: list[dict[str, Any]], target_date_is
             "spreads": [],
             "date_counts": {},
             "state_counts": {},
+            "telemetry": telem,
+            "total_tasks_probed": telem.get("total_tasks_probed", 0),
+            "tasks_with_data": telem.get("tasks_with_data", 0),
+            "tasks_market_closed": telem.get("tasks_market_closed", 0),
+            "tasks_failed": telem.get("tasks_rate_limited_failed", 0) + telem.get("tasks_network_failed", 0),
+            "missing_states": telem.get("missing_states", []),
+            "missing_crops": telem.get("missing_crops", []),
+            "total_monitored_states": telem.get("total_monitored_states", 31),
+            "total_monitored_crops": telem.get("total_monitored_crops", 348),
         }
 
     # Group by commodity for outlier filtering
@@ -101,6 +117,15 @@ def compute_clean_market_analytics(records: list[dict[str, Any]], target_date_is
 
     total_vol_all = sum(float(r.get("raw_arrival_quantity") or 0.0) for r in records)
 
+    total_probed = telem.get("total_tasks_probed", len(records))
+    tasks_with_data = telem.get("tasks_with_data", len(records))
+    tasks_closed = telem.get("tasks_market_closed", 0)
+    tasks_failed = telem.get("tasks_rate_limited_failed", 0) + telem.get("tasks_network_failed", 0)
+    missing_st = telem.get("missing_states", [])
+    missing_cr = telem.get("missing_crops", [])
+    total_states_mon = telem.get("total_monitored_states", len(state_rows))
+    total_crops_mon = telem.get("total_monitored_crops", len(comm_groups))
+
     return {
         "total_rows": len(records),
         "active_mandis": len(set(r.get("market") for r in records if r.get("market"))),
@@ -114,4 +139,13 @@ def compute_clean_market_analytics(records: list[dict[str, Any]], target_date_is
         "spreads": clean_spreads[:5],
         "date_counts": dict(sorted(date_counts.items(), reverse=True)),
         "state_counts": formatted_states,
+        "telemetry": telem,
+        "total_tasks_probed": total_probed,
+        "tasks_with_data": tasks_with_data,
+        "tasks_market_closed": tasks_closed,
+        "tasks_failed": tasks_failed,
+        "missing_states": missing_st,
+        "missing_crops": missing_cr,
+        "total_monitored_states": total_states_mon,
+        "total_monitored_crops": total_crops_mon,
     }
