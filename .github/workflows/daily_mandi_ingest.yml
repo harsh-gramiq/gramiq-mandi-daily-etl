@@ -6,6 +6,14 @@ on:
     - cron: '30 13 * * 1-6'
     # Night Reconciliation: Monday through Saturday at 18:30 UTC (12:00 AM IST) — Complete reconciliation
     - cron: '30 18 * * 1-6'
+name: 🌾 GramIQ MandiBhav — Daily National ETL & Teams Sync
+
+on:
+  schedule:
+    # Primary Sync: Monday through Saturday at 13:30 UTC (7:00 PM IST) — Peak national closing
+    - cron: '30 13 * * 1-6'
+    # Night Reconciliation: Monday through Saturday at 18:30 UTC (12:00 AM IST) — Complete reconciliation
+    - cron: '30 18 * * 1-6'
   workflow_dispatch:
     inputs:
       trade_date:
@@ -13,9 +21,13 @@ on:
         required: false
         default: ''
       lookback_days:
-        description: 'Trailing lookback window in days (default: 3)'
+        description: 'Trailing lookback window in days (default: 7)'
         required: false
-        default: '3'
+        default: '7'
+      workers:
+        description: 'Number of parallel worker threads (default: 24)'
+        required: false
+        default: '24'
       dry_run:
         description: 'Dry run mode (extract and calculate without database write)'
         type: boolean
@@ -33,7 +45,7 @@ jobs:
   ingest_mandi_rates:
     name: ⚡ AGMARKNET 2.0 Ingestion & Teams Card Dispatch
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 25
 
     steps:
       - name: 📥 Check out repository
@@ -53,6 +65,7 @@ jobs:
       - name: 🚀 Run Daily Ingestion & Dispatch Adaptive Card
         env:
           # Production PostgreSQL Credentials
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
           PRODUCTION_DB_HOST: ${{ secrets.PRODUCTION_DB_HOST }}
           PRODUCTION_DB_PORT: ${{ secrets.PRODUCTION_DB_PORT }}
           PRODUCTION_DB_NAME: ${{ secrets.PRODUCTION_DB_NAME }}
@@ -71,6 +84,13 @@ jobs:
           fi
           if [ -n "${{ github.event.inputs.lookback_days }}" ]; then
             CMD_ARGS="$CMD_ARGS --lookback-days ${{ github.event.inputs.lookback_days }}"
+          else
+            CMD_ARGS="$CMD_ARGS --lookback-days 7"
+          fi
+          if [ -n "${{ github.event.inputs.workers }}" ]; then
+            CMD_ARGS="$CMD_ARGS --workers ${{ github.event.inputs.workers }}"
+          else
+            CMD_ARGS="$CMD_ARGS --workers 24"
           fi
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
             CMD_ARGS="$CMD_ARGS --dry-run"
