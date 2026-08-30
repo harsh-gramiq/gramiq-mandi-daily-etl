@@ -64,6 +64,28 @@ class TestMarketAnalytics(unittest.TestCase):
         self.assertEqual(metrics["crop_counts"]["Wheat"]["min_price"], 2480.0)
         self.assertEqual(metrics["crop_counts"]["Wheat"]["max_price"], 2600.0)
 
+    def test_price_velocity_and_arbitrage_corridors(self):
+        records = [
+            {"commodity": "Chana(Gram)", "state": "Madhya Pradesh", "market": "Indore", "trade_date": "2026-08-29", "normalized_modal_price_qtl": 5400.0, "raw_arrival_quantity": "100"},
+            {"commodity": "Chana(Gram)", "state": "Delhi", "market": "Narela", "trade_date": "2026-08-29", "normalized_modal_price_qtl": 6200.0, "raw_arrival_quantity": "50"},
+            {"commodity": "Chana(Gram)", "state": "Madhya Pradesh", "market": "Indore", "trade_date": "2026-08-28", "normalized_modal_price_qtl": 5200.0, "raw_arrival_quantity": "120"},
+        ]
+        metrics = compute_clean_market_analytics(records, "2026-08-29")
+        
+        # Arbitrage corridors
+        self.assertTrue(len(metrics["arbitrage_corridors"]) >= 1)
+        corridor = metrics["arbitrage_corridors"][0]
+        self.assertEqual(corridor["commodity"], "Chana(Gram)")
+        self.assertEqual(corridor["origin_price"], 5400.0)
+        self.assertEqual(corridor["dest_price"], 6200.0)
+        self.assertEqual(corridor["gross_spread_rs"], 800.0)
+
+        # Price Velocity
+        self.assertIn("Chana(Gram)", metrics["price_velocity"])
+        vel = metrics["price_velocity"]["Chana(Gram)"]
+        self.assertIn("RALLY", vel["trend"])
+        self.assertTrue(vel["delta_rs"] > 0)
+
 
 if __name__ == "__main__":
     unittest.main()

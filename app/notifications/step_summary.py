@@ -61,6 +61,16 @@ def write_github_step_summary(
                     )
                 f.write("\n")
 
+            if metrics.get("arbitrage_corridors"):
+                f.write("### 💰 Top Inter-Mandi Arbitrage Trade Corridors (Gross Spread >= ₹150/Qtl)\n\n")
+                f.write("| Commodity | Origin Mandi (Low) | Dest Mandi (High) | Gross Spread | Gross Margin % |\n")
+                f.write("| :--- | :--- | :--- | :--- | :--- |\n")
+                for c in metrics["arbitrage_corridors"][:5]:
+                    f.write(
+                        f"| **{c['commodity']}** | {c['origin_mandi']} (₹{c['origin_price']:,.0f}) | {c['dest_mandi']} (₹{c['dest_price']:,.0f}) | **+₹{c['gross_spread_rs']:,.0f}/Qtl** | **+{c['spread_pct']}%** |\n"
+                    )
+                f.write("\n")
+
             if metrics.get("spreads"):
                 f.write("### 📈 Top Clean Inter-Mandi Spreads (Outlier Scrubbed)\n\n")
                 f.write("| Commodity | Min Price | Median Price | Max Price | Spread % | Volume |\n")

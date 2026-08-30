@@ -88,3 +88,14 @@ jobs:
             CMD_ARGS="$CMD_ARGS --dry-run"
           fi
           python main.py $CMD_ARGS
+
+      - name: 📦 Archive Partitioned Lakehouse Parquet Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mandi-lakehouse-parquet
+          path: |
+            data/lakehouse/**/*.parquet
+            data/lakehouse/**/*.jsonl
+          if-no-files-found: ignore
+          retention-days: 14

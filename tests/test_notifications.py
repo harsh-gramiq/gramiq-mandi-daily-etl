@@ -74,13 +74,18 @@ class TestNotifications(unittest.TestCase):
         self.assertEqual(crop_selector.get("style"), "compact")
         self.assertTrue(any(c["value"] == "Wheat" for c in crop_selector.get("choices", [])))
 
-        # Verify Toggle Visibility actions exist for both states and crops
+        # Verify Toggle Visibility actions exist for states, crops, and arbitrage
         actions = content.get("actions", [])
         toggle_actions = [a for a in actions if a.get("type") == "Action.ToggleVisibility"]
-        self.assertTrue(len(toggle_actions) >= 2)
+        self.assertTrue(len(toggle_actions) >= 3)
         target_ids = [t for a in toggle_actions for t in a.get("targetElements", [])]
         self.assertIn("cropBreakdownContainer", target_ids)
         self.assertIn("stateBreakdownContainer", target_ids)
+        self.assertIn("arbitrageBreakdownContainer", target_ids)
+
+        # Verify Action.OpenUrl exists
+        open_url_actions = [a for a in actions if a.get("type") == "Action.OpenUrl"]
+        self.assertTrue(len(open_url_actions) >= 1)
 
     def test_github_step_summary_writer(self):
         with tempfile.NamedTemporaryFile(mode="w+", delete=False, encoding="utf-8") as tf:

@@ -16,6 +16,7 @@ from app.notifications import (
     write_github_step_summary,
 )
 from app.storage import upsert_to_postgresql
+from app.storage.lakehouse import export_to_lakehouse
 
 if sys.stdout and hasattr(sys.stdout, "reconfigure"):
     try:
@@ -31,12 +32,13 @@ def run_pipeline(
     dry_run: bool = False,
     print_card: bool = False,
     matrix_path: Optional[str] = None,
+    export_parquet: bool = True,
 ) -> dict[str, Any]:
     """
     Executes the full national MandiBhav ETL and 7-day rolling reconciliation workflow:
     1. Multi-threaded block harvesting with round-robin state scheduling & backoff
-    2. Statistical IQR/Median outlier scrubbing and clean spread analysis with gap telemetry
-    3. Idempotent PostgreSQL/Supabase batched ingestion & summary refresh
+    2. Statistical IQR/Median outlier scrubbing, Price Velocity, and Arbitrage corridors
+    3. Dual-layer storage: Idempotent PostgreSQL/Supabase write & Partitioned Parquet Lakehouse
     4. Authentic Gemini AI market brief generation with agronomic guardrails
     5. Microsoft Teams Adaptive Card v1.5 construction with data gap container & dispatch
     6. GitHub Actions step summary markdown generation
@@ -61,15 +63,21 @@ def run_pipeline(
     )
 
     # 2. Statistical Outlier Scrubbing & Clean Arbitrage Analytics
-    print("\n🔍 Computing clean market analytics and outlier-scrubbed spreads...")
+    print("\n🔍 Computing clean market analytics, price velocity, and outlier-scrubbed spreads...")
     metrics = compute_clean_market_analytics(records, effective_date, telemetry=telemetry)
     print(
         f"   + Validated Rows: {metrics['total_rows']:,} across {metrics['active_commodities']} commodities in {metrics['active_states']} states"
     )
     print(f"   + Clean Spreads Computed: {len(metrics['spreads'])} commodities")
+    print(f"   + Arbitrage Corridors Identified: {len(metrics['arbitrage_corridors'])} routes")
     print(f"   + Pipeline Reliability: {metrics['tasks_with_data']}/{metrics['total_tasks_probed']} tasks active | {metrics['tasks_market_closed']} closed/off-season | {metrics['tasks_failed']} failed")
 
-    # 3. Database Upsert & Summary Refresh
+    # 3. Dual-Layer Storage: Lakehouse Parquet & PostgreSQL Database
+    lakehouse_info = {}
+    if export_parquet and records:
+        print("\n📦 Exporting validated dataset to Partitioned Parquet Lakehouse...")
+        lakehouse_info = export_to_lakehouse(records, effective_date)
+
     db_upserted = 0
     if not dry_run and records:
         print("\n💾 Ingesting records into Production Database...")
