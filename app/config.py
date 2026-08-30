@@ -18,7 +18,7 @@ ACTIVE_MATRIX_PATH = BASE_DIR / "active_national_matrix.json"
 # Pipeline Tuning Defaults
 DEFAULT_WORKERS = int(os.environ.get("MANDI_DEFAULT_WORKERS", "10"))
 DEFAULT_LOOKBACK_DAYS = int(os.environ.get("MANDI_DEFAULT_LOOKBACK_DAYS", "7"))
-HTTP_TIMEOUT_SECONDS = int(os.environ.get("MANDI_HTTP_TIMEOUT_S", "15"))
+HTTP_TIMEOUT_SECONDS = int(os.environ.get("MANDI_HTTP_TIMEOUT_S", "30"))
 HTTP_MAX_RETRIES = int(os.environ.get("MANDI_HTTP_RETRIES", "3"))
 HTTP_RETRY_BACKOFF_BASE = float(os.environ.get("MANDI_RETRY_BACKOFF_BASE", "2.0"))
 THREAD_DISPATCH_STAGGER_S = float(os.environ.get("MANDI_DISPATCH_STAGGER_S", "0.025"))

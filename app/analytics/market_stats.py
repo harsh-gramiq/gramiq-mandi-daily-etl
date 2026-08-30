@@ -115,6 +115,22 @@ def compute_clean_market_analytics(
             "volume": round(d["volume"], 1),
         }
 
+    # Format crop counts sorted by volume descending
+    formatted_crops = {}
+    for comm, rows in sorted(comm_groups.items(), key=lambda x: sum(float(r.get("raw_arrival_quantity") or 0.0) for r in x[1]), reverse=True):
+        vol = sum(float(r.get("raw_arrival_quantity") or 0.0) for r in rows)
+        prices = [r["normalized_modal_price_qtl"] for r in rows if r.get("normalized_modal_price_qtl", 0) > 0]
+        avg_p = sum(prices) / len(prices) if prices else 0.0
+        mandis_set = set(r.get("market") for r in rows if r.get("market"))
+        formatted_crops[comm] = {
+            "rows": len(rows),
+            "mandis": len(mandis_set),
+            "volume": round(vol, 1),
+            "avg_price": round(avg_p, 0),
+            "min_price": min(prices) if prices else 0.0,
+            "max_price": max(prices) if prices else 0.0,
+        }
+
     total_vol_all = sum(float(r.get("raw_arrival_quantity") or 0.0) for r in records)
 
     total_probed = telem.get("total_tasks_probed", len(records))
@@ -139,6 +155,7 @@ def compute_clean_market_analytics(
         "spreads": clean_spreads[:5],
         "date_counts": dict(sorted(date_counts.items(), reverse=True)),
         "state_counts": formatted_states,
+        "crop_counts": formatted_crops,
         "telemetry": telem,
         "total_tasks_probed": total_probed,
         "tasks_with_data": tasks_with_data,

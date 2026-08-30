@@ -36,6 +36,25 @@ def build_adaptive_card(
             "value": f"{d['rows']:,} rows | {d['mandis']} APMCs | {d['volume']:,} T",
         })
 
+    # Crop breakdown facts for toggle container (top 20 commodities)
+    crop_facts = []
+    crop_counts = metrics.get("crop_counts", {})
+    for crop, d in list(crop_counts.items())[:20]:
+        crop_facts.append({
+            "title": f"🌾 {crop}",
+            "value": f"{d['volume']:,} T | {d['mandis']} APMCs | Avg: ₹{d['avg_price']:,.0f}/Qtl (₹{d['min_price']:,.0f} - ₹{d['max_price']:,.0f})",
+        })
+
+    # Crop choices for compact Input.ChoiceSet dropdown
+    crop_choices = []
+    for crop, d in list(crop_counts.items())[:40]:
+        crop_choices.append({
+            "title": f"{crop} ({d['volume']:,} T | {d['mandis']} APMCs | ₹{d['avg_price']:,.0f}/Qtl)",
+            "value": crop,
+        })
+    if not crop_choices:
+        crop_choices.append({"title": "No Active Commodities", "value": "N/A"})
+
     # Gap telemetry facts
     missing_states = metrics.get("missing_states", [])
     missing_crops = metrics.get("missing_crops", [])
@@ -223,6 +242,21 @@ def build_adaptive_card(
                         },
                         {
                             "type": "TextBlock",
+                            "text": "🌾 COMMODITY MARKET SELECTOR",
+                            "weight": "Bolder",
+                            "size": "Medium",
+                            "spacing": "Medium",
+                        },
+                        {
+                            "type": "Input.ChoiceSet",
+                            "id": "cropSelector",
+                            "style": "compact",
+                            "placeholder": "🔍 Browse Ingested Crop Rates...",
+                            "value": crop_choices[0]["value"] if crop_choices else "Potato",
+                            "choices": crop_choices,
+                        },
+                        {
+                            "type": "TextBlock",
                             "text": "📈 QUANTITATIVE ARBITRAGE & VOLUME HIGHLIGHTS",
                             "weight": "Bolder",
                             "size": "Medium",
@@ -323,6 +357,21 @@ def build_adaptive_card(
                         },
                         {
                             "type": "Container",
+                            "id": "cropBreakdownContainer",
+                            "isVisible": False,
+                            "items": [
+                                {
+                                    "type": "TextBlock",
+                                    "text": "🌾 TOP COMMODITY ARRIVALS & PRICE LEDGER",
+                                    "weight": "Bolder",
+                                    "size": "Medium",
+                                    "spacing": "Medium",
+                                },
+                                {"type": "FactSet", "facts": crop_facts},
+                            ],
+                        },
+                        {
+                            "type": "Container",
                             "id": "stateBreakdownContainer",
                             "isVisible": False,
                             "items": [
@@ -340,9 +389,14 @@ def build_adaptive_card(
                     "actions": [
                         {
                             "type": "Action.ToggleVisibility",
+                            "title": "🌾 Toggle Crop Breakdown",
+                            "targetElements": ["cropBreakdownContainer"],
+                        },
+                        {
+                            "type": "Action.ToggleVisibility",
                             "title": "🗺️ Toggle State Breakdown",
                             "targetElements": ["stateBreakdownContainer"],
-                        }
+                        },
                     ],
                 },
             }
